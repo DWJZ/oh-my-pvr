@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -10,80 +11,95 @@ import (
 	"sync"
 )
 
-const (
-	uploadDir = "./uploads" // 文件保存目录
-)
-
 func main() {
-	// 创建上传目录
-	if err := os.MkdirAll(uploadDir, os.ModePerm); err != nil {
-		fmt.Println("Failed to create upload directory:", err)
-		return
-	}
-
-	// 文件上传接口
+	// File upload endpoint with CORS enabled.
 	http.HandleFunc("/upload", enableCORS(uploadHandler))
 
-	// 启动服务器
+	// Start the server.
 	fmt.Println("Server started at :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
-		fmt.Println("Failed to start server:", err)
+		log.Println("Failed to start server:", err)
 	}
 }
 
-// 启用 CORS 的中间件
+// enableCORS is a middleware function that sets CORS headers.
 func enableCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 设置 CORS 头
-		w.Header().Set("Access-Control-Allow-Origin", "*") // 允许所有域名访问
+		// Set CORS headers.
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-		// 如果是预检请求（OPTIONS），直接返回成功
+		// Handle preflight (OPTIONS) requests.
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		// 调用下一个处理器
+		// Call the next handler.
 		next(w, r)
 	}
 }
 
-// 文件上传处理函数
+// uploadHandler processes file uploads.
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r == nil {
 		http.Error(w, "Request is nil", http.StatusBadRequest)
 		return
 	}
 
-	// Parse the multipart form
+	// Parse the multipart form with a generous max memory allocation.
 	if err := r.ParseMultipartForm(10 << 28); err != nil {
 		http.Error(w, "Error parsing multipart form", http.StatusInternalServerError)
 		return
 	}
 
-	// 获取所有文件
+	// Read the upload directory from the request parameters.
+	// The client can send this as a form field or query parameter.
+	uploadDir := r.FormValue("uploadDir")
+	if uploadDir == "" {
+		// Fallback to default if not provided.
+		uploadDir = "./uploads"
+	}
+
+	// Clean the path to ensure no directory traversal occurs.
+	cleanUploadDir := filepath.Clean(uploadDir)
+
+	// Convert to an absolute path for clarity.
+	absUploadDir, err := filepath.Abs(cleanUploadDir)
+	if err != nil {
+		http.Error(w, "Failed to get absolute path", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("Saving files to: %s", absUploadDir)
+
+	// Create the upload directory if it doesn't exist.
+	if err := os.MkdirAll(absUploadDir, os.ModePerm); err != nil {
+		http.Error(w, "Failed to create upload directory", http.StatusInternalServerError)
+		return
+	}
+
+	// Retrieve all uploaded files from the "file" field.
 	files := r.MultipartForm.File["file"]
 	if len(files) == 0 {
 		http.Error(w, "No files uploaded", http.StatusBadRequest)
 		return
 	}
 
-	// 使用 WaitGroup 等待所有文件上传完成
+	// Use a WaitGroup to handle concurrent file uploads.
 	var wg sync.WaitGroup
 	wg.Add(len(files))
 
-	// 用于存储上传结果
+	// Slices to store upload results and errors.
 	results := make([]string, len(files))
 	errors := make([]error, len(files))
 
-	// 并行处理每个文件
+	// Process each file concurrently.
 	for i, fileHeader := range files {
 		go func(index int, header *multipart.FileHeader) {
 			defer wg.Done()
 
-			// 打开文件
+			// Open the uploaded file.
 			file, err := header.Open()
 			if err != nil {
 				errors[index] = err
@@ -91,30 +107,33 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			defer file.Close()
 
-			// 创建目标文件
-			filePath := filepath.Join(uploadDir, header.Filename)
-			dst, err := os.Create(filePath)
+			// Create the destination file path.
+			destPath := filepath.Join(absUploadDir, filepath.Base(header.Filename))
+			log.Printf("Saving file: %s", destPath)
+
+			// Create the destination file.
+			dst, err := os.Create(destPath)
 			if err != nil {
 				errors[index] = err
 				return
 			}
 			defer dst.Close()
 
-			// 将上传的文件内容复制到目标文件
+			// Copy the uploaded file contents to the destination file.
 			if _, err := io.Copy(dst, file); err != nil {
 				errors[index] = err
 				return
 			}
 
-			// 记录成功信息
+			// Record the success message.
 			results[index] = fmt.Sprintf("File uploaded successfully: %s", header.Filename)
 		}(i, fileHeader)
 	}
 
-	// 等待所有文件处理完成
+	// Wait for all file uploads to finish.
 	wg.Wait()
 
-	// 检查是否有错误
+	// Check for any errors during the upload process.
 	for _, err := range errors {
 		if err != nil {
 			http.Error(w, "Failed to upload some files", http.StatusInternalServerError)
@@ -122,7 +141,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 返回成功响应
+	// Return a successful response with the results.
 	w.WriteHeader(http.StatusOK)
 	for _, result := range results {
 		fmt.Fprintln(w, result)
