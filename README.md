@@ -5,7 +5,7 @@ This is a series managments tools for PVR. It can help you to manage your series
 ## TODO
 
 - [X] Choose upload path
-- [ ] Dockerlization
+- [X] Dockerlization
 - [ ] File Management
 - [ ] Monitor Series
 - [ ] Husky

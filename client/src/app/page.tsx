@@ -46,6 +46,7 @@ function App() {
         setMessage(["File upload failed."]);
       }
     } catch (error) {
+      console.error(error);
       setMessage(["Error uploading file."]);
     }
   };
@@ -56,9 +57,7 @@ function App() {
         <h1 className="text-3xl font-bold text-center">File Upload System</h1>
         <form onSubmit={handleSubmit} className="mt-6">
           <div className="mb-4">
-            <label className="block text-gray-700 mb-1">
-              Upload Directory
-            </label>
+            <label className="block text-gray-700 mb-1">Upload Directory</label>
             <input
               type="text"
               value={uploadDir}
